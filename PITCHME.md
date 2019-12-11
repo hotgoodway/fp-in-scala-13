@@ -31,6 +31,8 @@
 
 副作用を持つ単純な例から考えてみよう
 
+---
+
 #### 副作用を持つプログラム
 
 ```
@@ -61,8 +63,8 @@ def contest(p1: Player, p2: Player): Unit = winner(p1, p2) match {
 }
 ```
 
-※ 純粋関数 winner が切り出さられた
-※ contest関数にはまだ役割が2つある
+1. 純粋関数 winner が切り出さられた
+2. contest関数にはまだ役割が2つある
 
 ---
 
@@ -84,399 +86,249 @@ def contest(p1: Player, p2: Player): Unit =
 
 ---
 
-#### 
+#### 大規模で複雑なプログラムにも同じ原理が当てはまる
 
-> １つ以上のデータ型を操作する関数の集まりと、そうした関数の関係を指定する一連の法則のこと。
+> 副作用を持つ関数の中には必ず純粋関数として抽出部分がある
+
+```
+// 非純粋関数 f
+A => B
+
+// 分割後
+A => D // 純粋関数
+D => B // 非純粋関数
+
+```
+
+非純粋関数をプログラムの純粋なコアの「命令殻」と呼ぶ
 
 ---
 
-#### 代数的設計
+## 13.2 単純なIO型
 
-1. 法則が含まれている代数から作業を開始
-2. 表現を後から決定する
+IOという名前の新しいデータ型を導入すれば、同じようにリファクタリングができる。
 
-
-**構文解析には特に適している**
-
----
-
-#### ライブラリーの設計目標
-
-1. 表現力
-2. 速度
-3. 適切なエラー報告
-
----
-
-#### 最初は単純なパーサーから
+#### 導入後
 
 ```
-def char(c: Char): Parser[Char]
+trait IO { def run: Unit }
 
+def PrintLine(msg: String): IO =
+  new IO { def run = println(msg) }
+
+def contest(p1: Player, p2: Player): IO =
+  PrintLine(winnerMsg(winner(p1, p2)))
 ```
 
-Parser という型を作り出し、
+1. contest が純粋関数になった。IO型の値を返しますが、実行はしない。
+2. 副作用を発生させるのは IOのインタープリタ、runメソッドだけ。
+3. contest の役割はただ1つ、プログラムの各部分を合成すること。
 
-Parser の結果型を指定するパラメータを１つ定義している。
-
----
-
-#### パーサーの実行（代数を拡張）
-
-* 成功した場合は有効な型の結果を返し
-* 失敗した場合は失敗に関する情報を返し
-
+#### 参照透過性以外の価値
 
 ```
-def run[A](p: Parser[A])(input: String): Either[ParseError, A]
-```
-
----
-
-#### traitを使って明示化
-
-```
-trait Parsers[ParseError, Parser[+_]]
-  def run[A](p: Parser[A])(input: String): Either[ParseError, A]
-  def char(c: Char): Parser[Char]
-```
-
-1. Parser は型パラメータであり、それ自体が共変の型コンストラクタである
-2. Parser 型コンストラクタが Char に適用される
-
-#### 明白な法則
-
-```
-run(char(c))(c.toString) == Right(c)
-```
-
----
-
-#### 文字列全体を認識する方法がないので追加
-
-```
-def string(s: String): Parser[String]
-```
-
-#### 明白な法則
-
-```
-def run(string(s))(s) == Right(s)
-```
-
----
-
-#### どちらかの文字列を認識したい場合
-
-```
-def orString(s1: String, s2: String): Parser[String]
-```
-
-
-#### 多相にすると
-
-```
-def or[A](s1: Parser[A], s2: Parser[A]): Parser[A]
-```
-
-例:
-
-```
-run(or(string("abra"), string("cadabra")))("abra") == Rigth("abra")
-run(or(string("abra"), string("cadabra")))("cadabra") == Rigth("cadabra")
-```
-
----
-
-#### パーサーへの中置構文
-
-```
-trait Parsers[ParseError, Parser[+_]] { self =>
-  ...
-  def or[A](s1: Parser[A], s2: Parser[A]): Parser[A]
-  implicit def string(s: String): Parser[String]
-  implicit def operators[A](p: Parser[A]) = ParserOps[A](p)
-  
-  // StringがParserへ自動的に昇格される
-  implicit def asStringParser[A](a: A)(implicit f: A => Parser[String]):
-    ParserOps[String] = ParserOps(f(a))
-  
-  case class ParserOps[A](p: Parser[A]) {
-    // or(a, b)
-    def |[B>:A](p2: Parser[B]): Parser[B] = self.or(p, p2)
-    def or[B>:A](p2: => Parser[B]): Parser[B] = self.or(p, p2)
+trait IO { self =>
+  def run: Unit
+  def ++(io: IO): IO = new IO {
+    def run = { self.run; io.run }
+  }
+  object IO {
+    def empty: IO = new IO { def run = () }
   }
 }
 ```
 
----
+Monoidを形成すること
+1. 副作用の発生タイミングを遅らせる
+2. 各部分が自由に変えられる
 
-#### 繰り返し文字列の認識
+## 13.2.1 入力作用の処理
 
-```
-def listOfN[A](n: Int, p: Parser[A])]: Parser[List[A]]
-```
+IO型が表現できるのは「出力」作用だけで、入力が必要な場合はどうするの
 
-例:
-
-```
-run(listOfN(3, "ab" | "cad"))("ababcad") == Right("ababcad")
-run(listOfN(3, "ab" | "cad"))("cadabab") == Right("cadabab ")
-run(listOfN(3, "ab" | "cad"))("ababab") == Right("ababab")
-```
-
----
-
-#### 課題
-
-1. 必要なコンビネータが揃ったが、代数を最小限のプリミティブに絞り込むことができていない
-2. より汎用的な法則についても語られていない
-
----
-
-#### ガイドラインとなる質問
-
-1. 'a'の文字を 0 個以上認識する Parser[Int]
-2. 'a'の文字を 1 個以上認識する Parser[Int]、失敗（見つからない）した場合のヒント
-3. 0 個以上の'a'に続いて 1個以上の'b'を認識するパーサー
-4. 長さを取り出して削除するためだけにList[Char]の構築が効率悪いためどう解決?
-5. 様々な形式の繰り返しは本書の代数のプリミティブなの?
-6. ...
-7. a | b は b | a と同じ?
-8. a | (b | c) は (a | b) | c と同じ?
-9. ...
-
----
-
-## 9.2 代数の例
-
-コンビネータを洗い出してみよう。
-
----
+#### 華氏から摂氏へ変換の例
 
 ```
-// 文字 'a' の 0個以上の繰り返しを認識し、検出するためのプリミティブコンビネータ
-def many[A](p: Parser[A]): Parser[List[A]]
+def fahrenheitToCelsius(f: Double): Double =
+  (f - 32) * 5.0 / 9.0
 
-// 必要なのは要素の数を数えるためコンビネータmapを追加
-def map[A, B](a: Parser[A])(f: A => B): Parser[B]
-
-// 合成したら、以下のように Parser が定義できる
-map(many(char('a')))(_.size)
-
-// 便利な構文
-val numA: Parser[Int] = char('a').many.map(_.size)
+def converter: Unit = {
+  println("Enter a temperature in degrees Fahrenheit: ")
+  val d = readLine.toDouble
+  println(fahrenheitToCelsius(d))
+}
 ```
 
----
-
-#### Parser と map の結合
+#### IOを返す純粋関数として書いてみ
 
 ```
-trait Parsers[ParseError, Parser[+_]] {
-  ...
-  
-  // Prop を使って法則を実行可能になった
-  object Laws {
-    def equal[A](p1: Parser[A], p2: Parse[A])(in: Gen[String]): Prop =
-      forAll(in)(s => run(p1)(s) == run(p2)(s))
-      
-    def mapLaw[A](p: Parse[A])(in: Gen[String]): Prop =
-      equal(p, p.map(a => a))(in)
-  }
+def fahrenheitToCelsius(f: Double): Double =
+  (f - 32) * 5.0 / 9.0
+
+def converter: IO = {
+  val prompt: IO = PrintLine("Enter a temperature in degrees Fahrenheit: ")
+  // さて、どうしたものか?
+  // readLine の呼び出しをIOで包み込むことができるが、結果を取っておく場所はない。
+}
+```
+
+有効な型の値が得られる計算を表現できない
  
+
+#### 入力を許可するために型パラメータを導入
+
+```
+sealed trait IO[A] {
+  def run: A
+  def map[B](f: A => B): IO[B] =
+    new IO[B] { def run = f(self.run) }
+  def flatMap[B](f: A => IO[B]): IO[B] =
+    new IO[B] { def run = f(self.run).run }
+}
+```
+
+IO はモナドを形成するにようになる
+
+#### IOモナド
+
+```
+object IO extends Monad[IO] {
+  def unit[A](a: => A): IO[A] = new IO[A] { def run = a }
+  def flatMap[A, B](fa: IO[A])(f: A => IO[B]) = fa flatMap f
+  def apply[A](a: => A): IO[A] = unit(a)
+}
+```
+
+#### 再び converter の例を書いてみ
+
+```
+def ReadLine: IO[String] = IO { readLine }
+def PrintLine(msg: String): IO[Unit] = IO { println(msg) }
+
+def converter: IO[Unit] = for {
+  _ <- PrintLine("Enter a temperature in degrees Fahrenheit: ")
+  d <- ReadLine.map(_.toDouble)
+  _ <- PrintLine(fahrenheitToCelsius(d).toString)
+} yield ()
+```
+
+1. converter の定義から副作用がなくなって、参照透過な記述である
+2. converter.run は作用を実際に実行するインタープリタ
+3. モナドコンビネータのどれでも利用できる
+
+---
+
+#### 他のユースケース
+
+```
+// コンソールから1行を読み取り、それを表示するIO[Unit]
+val echo = ReadLine.flatMap(PrintLine)
+
+// コンソールから1行を読み取ることでIntを解析するIO[Int]
+val readInt = ReadLine.map(_.toInt)
+
+// コンソールから2行を読み取ることで(Int, Int)を解析するIO[(Int, Int)]
+// a ** b は map2(a, b)((_, _))と同じである
+val readInts = readInt ** readInt
+
+// コンソールから10行を読み取り、結果をリストで返すIO[List[String]]
+// replicateM(3)(fa) が sequence(List(fa, fa, fa))と同じである
+replicateM(10)(ReadLine)
+```
+
+---
+
+#### 対話形式のプログラム例
+
+ループの中でユーザに入力を求め、入力された値の階乗を計算する。
+
+```
+The Amazing Factorial REPL, v2.0
+q -quit
+<number> - compute the factorial of the given number
+<anything else> - crash spectacularly
+3
+factorial: 6
+7
+factorial: 5040
+q 
+```
+
+---
+
+#### IOを使った結果
+
+```
+def factorial(n: Int): IO[Int] = for {
+  acc <- ref(1)
+  _ <- foreachM(1 to n toStream) (i => acc.modify(_ * i).skip)
+  result <- acc.get
+} yield result
+
+val factorialREPL: IO[Unit] = sequence_(
+  IO { println(helpstring) },
+  doWhile { IO { readLine } } { line =>
+    val ok = line != "q"
+    when (ok) { for {
+      n <- factorial(line.toInt)
+      _ <- IO { println("factorial: " + n) }
+    } yield () }
+  }
+)
+```
+
+---
+
+#### 新たなモナドコンビネータ-1
+
+```
+// cond関数が trueを返す限り、1つ目の引数の作用を繰り返す。
+def doWhile[A](a: F[A])(cond: A => F[Boolean]): F[Unit] = for {
+  a1 <- a
+  ok <- cond(a1)
+  _ <- if (ok) doWhile(a)(conf) else unit(())
+}
+
+// 引数の作用を無限に繰り返す。
+def forever[A, B](a: F[A]): F[B] = {
+  lazy val t: F[B] = forever(a)
+  a flatMap (_ => t)
 }
 ```
 
 ---
 
-mapが利用できたので、stringに基づいてcharの実装
+#### 新たなモナドコンビネータ-2
 
 ```
-def char(c: Char): Parser[Char] =
-  string(c.toString) map (_.charAt(0))
+// ストリームを関数fで畳み込み、作用を結合し、その結果を返す。
+def foldM[A, B](l: Stream[A])(z: B)(f: (B, A) => F[B]): F[B] =
+  l match {
+    case h #:: t => f(z, h) flatMap (z2 => foldM(t)(z2)(f))
+    case _ => unit(z)
+  }
+
+// foldM関数と同じだが、結果を無視する
+def foldM_[A, B](l: Stream[A])(z: B)(f: (B, A) => F[B]): F[Unit] =
+  skip { foldM(l)(z)(f) }
+
+// ストリームの要素ごとにf関数を呼び出し、作用を結合する。
+def foreachM[A](l: Stream[A])(f: A => F[Unit]): F[Unit] =
+  foldM_(1)(())((u, a) => skip(f(a)))
 ```
 
----
+命令型プログラムをそのままIOモナドに埋め込んだとしても、全てのプログラムを純粋関数方式で表現することは可能。
 
-string と mapを使って succeedも定義可能
+## 13.2.2 単純なIO型の長所と短所
 
-```
-// string("")は任意な入力があっても常に成功するため、
-// このパーサーは入力文字列に関係なく常に a の値で成功する
-def succeed[A](a: A): Parser[A] =
-  string("") map (_ => a)
-```
+#### 長所(メリット)
 
----
+1. IOの計算は通常の値であり、リストに格納したり、関数に渡したり、動的に作成したりできる。
+共通のパターンは関数にまとめて再利用できる。
+2. IOの計算を値として具体化すると、IO型に組み込まれた単純なrunメソッドよりも興味深いインタープリタを作成できる。
 
-### 9.2.1 スライスと空ではない繰り返し
+#### 短所(問題点)
 
-many と map を組み合わせて、文字'a'の数を数えるのが、
-List[Char]を構築するのが効率悪いので、改善のコンビネータを導入。
-
-```
-def slice[A](p: Parser[A]): Parser[String]
-```
-
-manyが蓄積したリストを無視して、パーサーとマッチした部分の入力文字列だけ返す。
-
-???
-
----
-
-文字列'a'を１つ以上認識したいための新しいコンビネータを定義
-
-```
-def many1[A](p: Parser[A]): Parser[List[A]]
-```
-
-many1は、プリミティブではない、
-many をベースとして定義できる。
-※ many1は p の後ろにmany(p)が続いてるだけ
-
-1つ目のパーサーを実行し、成功すると別のパーサを実行する product を導入。
-
-```
-def product[A, B](p: Parser[A], p2: Parser[B]): Parser[(A, B)]
-
-// 中置記法も追加
-def **[B](p2: => Parser[B]): Parser[(A,B)] =
-  self.product(p,p2)
-```
-
----
-
-#### EXERCISE 9.1
-
-> product を使ってコンビネータ map2 を実装し、
-これを使って、many をベースとして many1 を実装せよ。
-
-```
-def map2[A, B, C](p: Parser[A], p2: Parser[B])(f: (A, B) => C): 
-  Parser[C]
-```
-
----
-
-#### ANSWER 9.1
-
-```
-def map2[A, B, C](p: Parser[A], p2: => Parser[B])(f: (A, B) => C): Parser[C] =
-  for { a <- p; b <- p2 } yield f(a,b)
-```
-
-```
-def many1[A](p: Parser[A]): Parser[List[A]] =
-  map2(p, many(p))(_ :: _)
-```
-
----
-
-#### 例
-
-many1を使って、0個以上の'a'に続いて1個以上の'b'を解析するためのパーサー
-
-```
-char('a').many.slice.map(_.size) ** char('b').many1.slice.map(_size)
-```
-
----
-
-#### EXERCISE 9.2
-
-> 難問: product の振る舞いを定義する法則を考え出せ。
-
----
-
-#### ANSWER 9.2
-
-```
-/*
-These can be implemented using a for-comprehension, 
-which delegates to the `flatMap` and `map` implementations we've provided on `ParserOps`, 
-or they can be implemented in terms of these functions directly.
-*/
-def product[A,B](p: Parser[A], p2: => Parser[B]): Parser[(A,B)] =
-  flatMap(p)(a => map(p2)(b => (a,b)))
-```
-
----
-
-#### EXERCISE 9.3
-
-> 難問: or, map2, succeedをベースとして manyを定義せよ
-
----
-
-#### ANSWER 9.3
-
-```
-def many[A](p: Parser[A]): Parser[List[A]] =
-  map2(p, many(p))(_ :: _) or succeed(List())
-```
-
----
-
-#### EXERCISE 9.4
-
-> 難問: map2 と succeed を使って
-先の listOfN コンビネータを実装せよ
-
-```
-def listOfN[A](n: Int, p: Parser[A]): Parser[List[A]]
-```
-
----
-
-#### ANSWER 9.4
-
-```
-def listOfN[A](n: Int, p: Parser[A]): Parser[List[A]] =
-  if (n <= 0) succeed(List())
-  else map2(p, listOfN(n-1, p))(_ :: _)
-```
-
----
-
-#### 例
-
-or, map2, succeed をベースとして many の実装
-
-```
-def many[A](p: Parser[A]): Parser[List[A]] =
-  map2(p, many(p))(_ :: _) or succeed(List())
-```
-
-問題点: map2の第2引数 many(p)の評価に置いて正格である。
-※ 常に評価される
-
-```
-many(p)
-map2(p, many(p))(_ :: _)
-map2(p, map2(p, many(p))(_ :: _))(_ :: _)
-map2(p, map2(p, map2(p, many(p)))(_ :: _))(_ :: _))(_ :: _)
-...
-```
-
-#### 非正格にする
-
-```
-def product[A, B](p: Parser[A], p2: => Parser[B]): Parser[(A, B)]
-
-def map2[A, B, C](p: Parser[A], p2: => Parser[B])(f: (A, B) => C): Parser[C] =
-  product(p, p2) map (f.tupled)
-```
-
----
-
-#### or も非正格にすべき
-
-入力で p1を試し、p1に失敗した場合にのみp2を試す
-
-```
-def or[B>:A](p2: => Parser[B]): Parser[B]
-```
-
-
-
+1. 多くのIOプログラムは、ランタイムコールスタックをオーバーフローさせ、StackOverflowErrorを発生させる。
+2. IO[A]型の値は完全に不透明である。一般的にすぎる。
+3. この単純なIO型には、並列処理や非同期処理のことは何も定義されていない。
