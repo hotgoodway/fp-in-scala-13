@@ -27,9 +27,64 @@
 
 ---
 
-## 9.1 代数の設計から始める
+## 13.1 作用のリファクタリング
 
-#### 代数とは
+副作用を持つ単純な例から考えてみよう
+
+#### 副作用を持つプログラム
+
+```
+case class Player(name: String, score: Int)
+
+def contest(p1: Player, p2: Player): Unit =
+  if (p1.score > p2.score)
+    println(s"${p1.name} is the winner!")
+  else if (p2.score > p1.score)
+    println(s"${p2.name} is the winner!")
+  else
+    println("It's a draw.")
+```
+
+---
+
+#### 勝者を割り出すロジックを抜き出す後
+
+```
+def winner(p1: Player, p2: Player): Option[Player] =
+  if (p1.score > p2.score) Some(p1)
+  else if (p2.score > p1.score) Some(p2)
+  else None
+
+def contest(p1: Player, p2: Player): Unit = winner(p1, p2) match {
+  case Some(Player(name, _)) => println(s"${name} is the winner!")
+  case None => println("It's a draw.")
+}
+```
+
+※ 純粋関数 winner が切り出さられた
+※ contest関数にはまだ役割が2つある
+
+---
+
+#### さらにリファクタリング
+
+```
+// どちらのメッセージが妥当であるかを判断する役割
+def winnerMsg(p: Option[Player]): String = p map {
+  case Play(name, _) => s"$name is the winner!"
+} getOrElse "It's a draw."
+
+// メッセージをコンソールに出力する役割
+def contest(p1: Player, p2: Player): Unit =
+  println(winnerMsg(winner(p1, p2)))
+```
+
+1. 副作用である println がプログラムの最も外側のレイヤにのみある
+2. println の呼び出しの内側にあるのが純粋な式である
+
+---
+
+#### 
 
 > １つ以上のデータ型を操作する関数の集まりと、そうした関数の関係を指定する一連の法則のこと。
 
