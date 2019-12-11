@@ -22,7 +22,8 @@
 
 > 生成された記述は、外部作用を実際に適用するために別のインタープリタによって実行される。
 > 実質的には、命令型プログラミングのためのEDSLを組み立てている。
-> ※ EDSL: Embedded Domain-Specific Language
+
+※ EDSL: Embedded Domain-Specific Language
 
 ---
 
